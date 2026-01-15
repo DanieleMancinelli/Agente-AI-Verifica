@@ -1,51 +1,47 @@
-import re, os
+import os, re
+import streamlit as st
 from dotenv import load_dotenv
 from langchain_groq import ChatGroq
 from tools import tool_pantry, tool_pref
 
 load_dotenv()
-
 llm = ChatGroq(model_name="llama-3.3-70b-versatile", temperature=0)
 
-SYSTEM_PROMPT = """Sei l'assistente Chef. Il tuo obiettivo è accompagnare l'utente in un percorso dialogico.
-
-REGOLE STRINGENTI (Segui alla lettera):
-1. Se l'utente nomina ingredienti, usa tool_pantry (Formato: Nome, Quantita, True/False). Se non sai la quantità o scadenza, scrivi 'non specificata' e 'False'.
-2. NON PROPORRE RICETTE finché non hai chiesto e ottenuto la QUANTITÀ e la SCADENZA di ogni ingrediente.
-3. NON ASSUMERE di avere ingredienti che l'utente non ha citato (es. melanzane, panna).
-4. Se hai informazioni sufficienti, proponi esattamente 3 ricette includendo: Nome, Tempo, Ingredienti con dosi e Preparazione.
-5. Usa tool_pref per allergie o gusti.
-
-FORMATO RISPOSTA:
-Thought: (riflessione)
-Action: (tool_pantry o tool_pref o NONE)
-Action Input: (input tool)
-Final Answer: (la tua risposta all'utente)
-
-User: {input}"""
-
 def run_chef_agent(user_input):
-    scratchpad = ""
-    for i in range(10):
-        full_prompt = f"{SYSTEM_PROMPT.format(input=user_input)}\n{scratchpad}"
-        response = llm.invoke(full_prompt).content
-        print(f"\n--- RAGIONAMENTO CICLO {i+1} ---\n{response}\n")
+    # --- FASE 1: ESTRAZIONE RIGIDA ---
+    # Obblighiamo l'AI a non inventare scadenze
+    ext_prompt = f"""Analizza: '{user_input}'. 
+    REGOLE ESTRAZIONE:
+    1. Per ogni cibo scrivi: ADD: nome, quantita, scadenza
+    2. SCADENZA: Scrivi 'True' SOLO se l'utente indica una data vicina o dice 'scade oggi/a breve'. 
+       In TUTTI gli altri casi (anche se è in frigo), scrivi 'False'.
+    3. VINCOLI: Se vedi allergie, celiachia o diete (vegano), scrivi: PREF: testo.
+    
+    Rispondi solo con le righe ADD o PREF."""
+    
+    raw_ext = llm.invoke(ext_prompt).content
+    for line in raw_ext.split("\n"):
+        if "ADD:" in line:
+            parts = line.split("ADD:")[-1].split(",")
+            if len(parts) >= 1:
+                tool_pantry(parts[0], parts[1] if len(parts)>1 else "?", parts[2] if len(parts)>2 else "False")
+        if "PREF:" in line:
+            tool_pref(line.split("PREF:")[-1].strip())
 
-        if "Final Answer:" in response:
-            return response.split("Final Answer:")[-1].strip()
-
-        action = re.search(r"Action:\s*(\w+)", response)
-        action_input = re.search(r"Action Input:\s*(.*)", response)
-
-        if action and "NONE" not in action.group(1).upper():
-            act_name = action.group(1).strip()
-            act_in = action_input.group(1).strip() if action_input else ""
-            
-            if "pantry" in act_name.lower(): obs = tool_pantry(act_in)
-            elif "pref" in act_name.lower(): obs = tool_pref(act_in)
-            else: obs = "Errore tool."
-            
-            scratchpad += f"\nThought: {response}\nObservation: {obs}\n"
-        else:
-            return response.replace("Thought:", "").strip()
-    return "L'agente è confuso. Prova a dare un comando semplice."
+    # --- FASE 2: RAGIONAMENTO E RISPOSTA ---
+    p_status = ", ".join([f"{i.nome}({i.quantita}, scad:{i.in_scadenza})" for i in st.session_state.pantry])
+    pref_status = ", ".join(st.session_state.profile.vincoli_salute)
+    
+    chat_prompt = f"""Sei l'assistente Chef. 
+    DISPENSA ATTUALE: {p_status}
+    VINCOLI ALIMENTARI: {pref_status}
+    
+    REGOLE DI RISPOSTA:
+    1. Se mancano quantita (?) o scadenze per gli ingredienti principali, chiedile.
+    2. Se l'utente menziona CELIACI o VEGANI, segnali nelle PREFERENZE e proponi SOLO ricette adatte (es. senza glutine, senza derivati animali).
+    3. Solo se hai tutto, proponi 3 RICETTE DETTAGLIATE.
+    4. Usa un tono professionale ma amichevole.
+    
+    Messaggio utente: {user_input}"""
+    
+    return llm.invoke(chat_prompt).content

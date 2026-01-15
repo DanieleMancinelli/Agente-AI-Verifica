@@ -7,5 +7,4 @@ class Ingredient(BaseModel):
     in_scadenza: bool = False
 
 class UserProfile(BaseModel):
-    preferenze: List[str] = []
     vincoli_salute: List[str] = []
