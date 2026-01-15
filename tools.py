@@ -6,17 +6,19 @@ def tool_pantry(nome, qta, scad):
     if len(nome) < 2: return
     
     qta = qta.strip()
-    # Accetta True solo se è scritto esplicitamente, altrimenti sempre False
-    scad_bool = "true" in str(scad).lower()
+    # FORZATURA: Scadenza True solo se l'input contiene ESPLICITAMENTE "true"
+    scad_bool = str(scad).lower().strip() == "true"
     
     for i in st.session_state.pantry:
         if i.nome == nome:
-            if qta != "?": i.quantita = qta
+            if qta not in ["?", "non specificata"]: i.quantita = qta
             i.in_scadenza = scad_bool
             return
     st.session_state.pantry.append(Ingredient(nome=nome, quantita=qta, in_scadenza=scad_bool))
 
 def tool_pref(testo):
     testo = testo.strip().capitalize()
-    if testo and testo not in st.session_state.profile.vincoli_salute:
+    blacklist = ["No", "Niente", "Tutto a posto", "Ok", "Si", "Nulla"]
+    if any(b in testo for b in blacklist) or len(testo) < 3: return
+    if testo not in st.session_state.profile.vincoli_salute:
         st.session_state.profile.vincoli_salute.append(testo)
